@@ -23,19 +23,36 @@ using namespace System.Windows.Forms
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 
-# Check the directory to scan
-function Test-ScanDir {
+# Retrive and check the options values
+function Set-Options {
 	param (
-		[string]$ScanDir
+		[System.Windows.Window]$OptionsWindow,
+		[pscustomobject]$Options
 	)
-	if ($ScanDir -eq "") {
-		throw "No directory selected"
+	# Get the values from the dialog
+	$Options.ScanDir = $OptionsWindow.FindName("ScanDir").Text
+	$Options.Reports = foreach ($Report in @("FilesAndDirectories","DuplicateFiles")) {
+		if ($OptionsWindow.FindName($Report).IsChecked) {
+			$Report
+		}
 	}
-	if (-not (Test-Path $ScanDir -PathType Container)) {
-		throw "Invalid directory [$ScanDir]"
+	$Options.Save = $OptionsWindow.FindName("Save").IsChecked
+	# Check the values
+	[string]$ValidationMessage = ""
+	if (!$Options.ScanDir) {
+		$ValidationMessage += "No directory selected`n"
+	} elseif (!(Test-Path $Options.ScanDir -PathType Container)) {
+		$ValidationMessage += "Invalid directory [" + $Options.ScanDir + "]`n"
 	}
-	Write-Host "Selected directory to scan: $ScanDir"
-	return $ScanDir
+	if (!$Options.Reports) {
+		$ValidationMessage += "No report selected`n"
+	}
+	# Display a message and return validation result
+	if ($ValidationMessage) {
+		Write-Host $ValidationMessage
+		$null = [MessageBox]::Show($ValidationMessage,"Invalid options",[MessageBoxButtons]::OK,[MessageBoxIcon]::Warning)
+	}
+	return ![bool]$ValidationMessage
 }
 
 # Display the options dialog
@@ -88,6 +105,12 @@ function Read-Options {
 	</StackPanel>
 </Window>
 "@
+	# Initialize the options
+	[pscustomobject]$Options = [pscustomobject]@{
+		ScanDir = $null
+		Reports = $null
+		Save = $null
+	}
 	# Build the window
 	[System.Xml.XmlNodeReader]$OptionsReader = New-Object System.Xml.XmlNodeReader $OptionsXaml
 	[System.Windows.Window]$OptionsWindow = [Windows.Markup.XamlReader]::Load($OptionsReader)
@@ -97,27 +120,16 @@ function Read-Options {
 	})
 	# Add an event for OKButton
 	$OptionsWindow.FindName("OKButton").add_click({
-		$OptionsWindow.DialogResult = $true
+		if (Set-Options $OptionsWindow $Options) {
+			$OptionsWindow.DialogResult = $true
+		}
 	})
 	# Display the dialog
 	if (!$OptionsWindow.Showdialog()) {
 		throw "Process canceled"
 	}
-	# Get options values from the dialog
-	[pscustomobject] $Options = @{
-		ScanDir = $OptionsWindow.FindName("ScanDir").Text
-		Reports = foreach ($Report in @("FilesAndDirectories","DuplicateFiles")) {
-			if ($OptionsWindow.FindName($Report).IsChecked) {
-				$Report
-			}
-		}
-		Save = $OptionsWindow.FindName("Save").IsChecked
-	}
-	# Check options values
-	Test-ScanDir $Options.ScanDir
-	if (!$Options.Reports) {
-		throw "No report selected"
-	}
+	# Trace the options values
+	Write-Host "Selected directory to scan: " + $Options.ScanDir
 	Write-Host "Selected reports: " $Options.Reports
 	Write-Host "Save to CSV files: " $Options.Save
 	return $Options
@@ -142,7 +154,6 @@ function Test-ReportPath {
 	if (Test-Path $ReportPath -PathType Container) {
 		throw "Output report path [$ReportPath] is a directory"
 	}
-	[string]$BoxTitle = "Confirmation"
 	if (Test-Path $ReportPath -PathType Leaf) {
 		[string]$BoxMessage = "Output report file already exists [$ReportPath]. Do you want to replace it or to cancel the process?"
 		[MessageBoxIcon]$BoxIcon = [MessageBoxIcon]::Warning
@@ -150,7 +161,7 @@ function Test-ReportPath {
 		[string]$BoxMessage = "Output report file will be generated in [$ReportPath]. Do you want to proceed?"
 		[MessageBoxIcon]$BoxIcon = [MessageBoxIcon]::Question
 	}
-	if ([MessageBox]::Show($BoxMessage,$BoxTitle,[MessageBoxButtons]::OKCancel,$BoxIcon) -eq [DialogResult]::Cancel) {
+	if ([MessageBox]::Show($BoxMessage,"Confirmation",[MessageBoxButtons]::OKCancel,$BoxIcon) -eq [DialogResult]::Cancel) {
 		throw "Process canceled"
 	}
 }
@@ -164,13 +175,13 @@ function Get-FilesAndDirectories {
 	Get-ChildItem -Recurse -Path $ScanDir | Where-Object FullName -ne $ReportPath | ForEach-Object {
 		return [pscustomobject]@{
 			Name = $_.Name
-			Type = if ($_.PSIsContainer) {"<DIR>"} ElseIf ($_.Extension) {$_.Extension} Else {"<UNDEF>"}
-			SizeInBytes = if ($_.PSIsContainer) {"<N/A>"} Else {$_.Length}
-			NumberOfChildren = if ($_.PSIsContainer) {$_.GetFileSystemInfos().Count} Else {"<N/A>"}
+			Type = if ($_.PSIsContainer) {"<DIR>"} elseif ($_.Extension) {$_.Extension} else {"<UNDEF>"}
+			SizeInBytes = if ($_.PSIsContainer) {"<N/A>"} else {$_.Length}
+			NumberOfChildren = if ($_.PSIsContainer) {$_.GetFileSystemInfos().Count} else {"<N/A>"}
 			CreationTime = $_.CreationTime
 			LastAccessTime = $_.LastAccessTime
 			LastWriteTime = $_.LastWriteTime
-			ParentDirectory = if ($_.PSIsContainer) {$_.Parent.FullName} Else {$_.Directory}
+			ParentDirectory = if ($_.PSIsContainer) {$_.Parent.FullName} else {$_.Directory}
 			FullPath = $_.FullName
 		}
 	}
@@ -195,7 +206,7 @@ function Get-DuplicateFiles {
 # Main execution
 try {
 	# Display the options dialog
-	[pscustomobject] $Options = Read-Options
+	[pscustomobject]$Options = Read-Options
 	# Check the reports paths
 	if ($Options.Save) {
 		foreach ($Report in $Options.Reports) {
