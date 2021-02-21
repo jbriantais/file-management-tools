@@ -20,6 +20,8 @@
 ########################################################################
 
 using namespace System.Windows.Forms
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName System.Windows.Forms
 
 # Check the directory to scan
 function Test-ScanDir {
@@ -36,18 +38,22 @@ function Test-ScanDir {
 	return $ScanDir
 }
 
-# Select the reports to generate
+# Display the options dialog
 function Read-Options {
-	# Design of the dialog to select reports to generate
-	[xml]$SelectReportsXaml = @"
+	# Design of the dialog
+	[xml]$OptionsXaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-		Title="Select reports" WindowStartupLocation="CenterScreen" ResizeMode="NoResize" UseLayoutRounding="True"
+		Title="Options" WindowStartupLocation="CenterScreen" ResizeMode="NoResize" UseLayoutRounding="True"
 		SizeToContent="WidthAndHeight" TextOptions.TextFormattingMode="Display">
 	<StackPanel Margin="10,7,10,7">
 		<StackPanel.Resources>
 			<Style TargetType="{x:Type TextBlock}">
 				<Setter Property="Margin" Value="7,5,7,5"/>
 				<Setter Property="TextWrapping" Value="Wrap"/>
+			</Style>
+			<Style TargetType="{x:Type TextBox}">
+				<Setter Property="Margin" Value="7,5,7,5"/>
+				<Setter Property="Padding" Value="3,3,3,3"/>
 			</Style>
 			<Style TargetType="{x:Type CheckBox}">
 				<Setter Property="Margin" Value="7,5,7,5"/>
@@ -60,6 +66,11 @@ function Read-Options {
 				<Setter Property="Padding" Value="20,3,20,3"/>
 			</Style>
 		</StackPanel.Resources>
+		<TextBlock>Which directory do you want to scan?</TextBlock>
+		<DockPanel>
+			<Button Name="BrowseButton" DockPanel.Dock="Right">Browse...</Button>
+			<TextBox Name="ScanDir"/>
+		</DockPanel>
 		<TextBlock>Which reports do you want to generate?</TextBlock>
 		<CheckBox Name="FilesAndDirectories">List and details of files and directories</CheckBox>
 		<CheckBox Name="DuplicateFiles">Duplicate files *</CheckBox>
@@ -67,8 +78,8 @@ function Read-Options {
 			<LineBreak/>If runing on a network file system, it may be preferable to do some cleanup of large files first.</TextBlock>
 		<TextBlock>What do you want to do with these reports?</TextBlock>
 		<UniformGrid HorizontalAlignment="Left" Rows="1" Columns="2">
-			<RadioButton Name = "Save" GroupName = "Action" IsChecked="True">Save to CSV files</RadioButton>
-			<RadioButton Name = "Display" GroupName = "Action">Display on screen</RadioButton>
+			<RadioButton Name="Save" GroupName="Action" IsChecked="True">Save to CSV files</RadioButton>
+			<RadioButton Name="Display" GroupName="Action">Display on screen</RadioButton>
 		</UniformGrid>
 		<UniformGrid HorizontalAlignment="Right" Rows="1" Columns="2">
 			<Button Name="OKButton" IsDefault="True">OK</Button>
@@ -77,39 +88,45 @@ function Read-Options {
 	</StackPanel>
 </Window>
 "@
-	# Build the SelectReportsWindow
-	[System.Xml.XmlNodeReader]$SelectReportsReader = New-Object System.Xml.XmlNodeReader $SelectReportsXaml
-	Add-Type -AssemblyName PresentationFramework
-	[System.Windows.Window]$SelectReportsWindow = [Windows.Markup.XamlReader]::Load($SelectReportsReader)
-	# Add an event for OKButton
-	$SelectReportsWindow.FindName("OKButton").add_click({
-		$SelectReportsWindow.DialogResult = $true
+	# Build the window
+	[System.Xml.XmlNodeReader]$OptionsReader = New-Object System.Xml.XmlNodeReader $OptionsXaml
+	[System.Windows.Window]$OptionsWindow = [Windows.Markup.XamlReader]::Load($OptionsReader)
+	# Add an event for BrowseButton
+	$OptionsWindow.FindName("BrowseButton").add_click({
+		$OptionsWindow.FindName("ScanDir").Text = & $PSScriptRoot\Read-FolderBrowserDialog.ps1
 	})
-	# Display the dialog to select reports
-	if (!$SelectReportsWindow.Showdialog()) {
+	# Add an event for OKButton
+	$OptionsWindow.FindName("OKButton").add_click({
+		$OptionsWindow.DialogResult = $true
+	})
+	# Display the dialog
+	if (!$OptionsWindow.Showdialog()) {
 		throw "Process canceled"
 	}
 	# Get options values from the dialog
-	[pscustomobject] $SelectedOptions = @{
+	[pscustomobject] $Options = @{
+		ScanDir = $OptionsWindow.FindName("ScanDir").Text
 		Reports = foreach ($Report in @("FilesAndDirectories","DuplicateFiles")) {
-			if ($SelectReportsWindow.FindName($Report).IsChecked) {
+			if ($OptionsWindow.FindName($Report).IsChecked) {
 				$Report
 			}
 		}
-		Save = $SelectReportsWindow.FindName("Save").IsChecked
+		Save = $OptionsWindow.FindName("Save").IsChecked
 	}
 	# Check options values
-	if (!$SelectedOptions.Reports) {
+	Test-ScanDir $Options.ScanDir
+	if (!$Options.Reports) {
 		throw "No report selected"
 	}
-	Write-Host "Selected reports: " $SelectedOptions.Reports
-	Write-Host "Save to CSV files: " $SelectedOptions.Save
-	return $SelectedOptions
+	Write-Host "Selected reports: " $Options.Reports
+	Write-Host "Save to CSV files: " $Options.Save
+	return $Options
 }
 
 # Get the report path
 function Get-ReportPath {
 	param (
+		[string]$ScanDir,
 		[string]$Report
 	)
 	return "$ScanDir\FileTreeScanReport-$Report.csv"
@@ -118,9 +135,10 @@ function Get-ReportPath {
 # Check the report path
 function Test-ReportPath {
 	param (
+		[string]$ScanDir,
 		[string]$Report
 	)
-	[string]$ReportPath = Get-ReportPath $Report
+	[string]$ReportPath = Get-ReportPath $ScanDir $Report
 	if (Test-Path $ReportPath -PathType Container) {
 		throw "Output report path [$ReportPath] is a directory"
 	}
@@ -176,32 +194,30 @@ function Get-DuplicateFiles {
 
 # Main execution
 try {
-	# Display initial dialogs
-	[string]$ScanDir = & $PSScriptRoot\Read-FolderBrowserDialog.ps1
-	Test-ScanDir $ScanDir
-	[pscustomobject] $SelectedOptions = Read-Options
-	# Check the report paths
-	if ($SelectedOptions.Save) {
-		foreach ($Report in $SelectedOptions.Reports) {
-			Test-ReportPath $Report
+	# Display the options dialog
+	[pscustomobject] $Options = Read-Options
+	# Check the reports paths
+	if ($Options.Save) {
+		foreach ($Report in $Options.Reports) {
+			Test-ReportPath $Options.ScanDir $Report
 		}
 	}
 	# Run the reports
 	Write-Host "Please wait until process has finished..."
-	foreach ($Report in $SelectedOptions.Reports) {
+	foreach ($Report in $Options.Reports) {
 		Write-Host "Generating $Report..."
-		if ($SelectedOptions.Save) {
-			[string]$ReportPath = Get-ReportPath $Report
-			& Get-$Report $ScanDir $ReportPath | ConvertTo-Csv -NoTypeInformation -Delimiter "`t" | Out-File $ReportPath
+		if ($Options.Save) {
+			[string]$ReportPath = Get-ReportPath $Options.ScanDir $Report
+			& Get-$Report $Options.ScanDir $ReportPath | ConvertTo-Csv -NoTypeInformation -Delimiter "`t" | Out-File $ReportPath
 		} else {
-			& Get-$Report $ScanDir "" | Out-GridView -Wait -Title $Report
+			& Get-$Report $Options.ScanDir "" | Out-GridView -Wait -Title $Report
 		}
 	}
 	# Display a message
 	[string]$DoneTitle = "Done"
 	Write-Host $DoneTitle
-	if ($SelectedOptions.Save) {
-		[string]$DoneMessage = "Reports saved under [$ScanDir]"
+	if ($Options.Save) {
+		[string]$DoneMessage = "Reports saved under [" + $Options.ScanDir + "]"
 		Write-Host $DoneMessage
 		$null = [MessageBox]::Show($DoneMessage,$DoneTitle,[MessageBoxButtons]::OK,[MessageBoxIcon]::Information)
 	}
