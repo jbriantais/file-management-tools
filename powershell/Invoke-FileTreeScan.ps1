@@ -23,6 +23,12 @@ using namespace System.Windows.Forms
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName System.Windows.Forms
 
+# Exit the script when the user cancels operation from a dialog
+function Exit-Dialog {
+	Write-Host "Process cancelled"
+	exit
+}
+
 # Retrive and check the options values
 function Set-Options {
 	param (
@@ -126,7 +132,7 @@ function Read-Options {
 	})
 	# Display the dialog
 	if (!$OptionsWindow.Showdialog()) {
-		throw "Process canceled"
+		Exit-Dialog
 	}
 	# Trace the options values
 	Write-Host "Selected directory to scan: " + $Options.ScanDir
@@ -162,7 +168,7 @@ function Test-ReportPath {
 		[MessageBoxIcon]$BoxIcon = [MessageBoxIcon]::Question
 	}
 	if ([MessageBox]::Show($BoxMessage,"Confirmation",[MessageBoxButtons]::OKCancel,$BoxIcon) -eq [DialogResult]::Cancel) {
-		throw "Process canceled"
+		Exit-Dialog
 	}
 }
 
@@ -238,4 +244,5 @@ try {
 	[string]$ErrorMessage = $_.Exception.toString() + "`n" + $_.ScriptStackTrace.toString()
 	Write-Warning -message ($ErrorTitle + "`n" + $ErrorMessage)
 	$null = [MessageBox]::Show($ErrorMessage,$ErrorTitle,[MessageBoxButtons]::OK,[MessageBoxIcon]::Error)
+	exit 1
 }
